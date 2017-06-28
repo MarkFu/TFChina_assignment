@@ -16,19 +16,25 @@ quota_buffer = 0.15 # % of buffer for each ratio balance category
 headcount_lb = 10 # lowerbound to enforce ratio balance (# headcount in a city)
 
 ## LOAD DATA
-input_data = 'data_cleaned_v5.xlsx'
+input_data = 'data_cleaned_v7.xlsx'
 df_teacher = pd.read_excel(input_data, sheetname = 'Teachers', header = 0, na_values = "", encoding="gbk")
 df_school = pd.read_excel(input_data, sheetname = 'Schools', header = 0, na_values = "", encoding="gbk")
 df_svh = pd.read_excel('mapping table.xlsx', sheetname = 'science_v_humanity', header = 0, na_values = "", encoding="gbk")
 df_english = pd.read_excel('mapping table.xlsx', sheetname = 'Englisth_competency', header = 0, na_values = "", encoding="gbk")
 df_priority = pd.read_excel('mapping table.xlsx', sheetname = 'TF_China', header = 0, na_values = "", encoding="gbk")
-writer = pd.ExcelWriter('Output_v0624.xlsx')
+df_flexibility = pd.read_excel('mapping table.xlsx', sheetname = 'Flexibility', header = 0, na_values = "", encoding="gbk")
+writer = pd.ExcelWriter('Output_v0624_v4.xlsx')
 
 ## DATA PREPARATION
 df_school = df_school.sort_values(by = '地级市'.decode('utf-8')) # group by city (sort by count if needed)
 list_city = df_school['地级市'.decode('utf-8')].unique()
 cols_exp = ['项目学校'.decode('utf-8'),'科目'.decode('utf-8'),'老师'.decode('utf-8'),'科目优先级'.decode('utf-8')]
 # df_teacher = df_teacher.sample(frac = 1).reset_index(drop=True) # shuffle teachers; to be removed
+
+# label flexible candidates
+df_teacher = pd.merge(df_teacher, df_flexibility, how = 'left', left_on = '姓名'.decode('utf-8'), right_on = '姓名'.decode('utf-8'))
+df_teacher['调整后选择地区'.decode('utf-8')] = df_teacher['调整后选择地区'.decode('utf-8')].fillna(df_teacher['选择地区'.decode('utf-8')])
+
 df_cand = df_teacher.copy()
 
 # province
@@ -174,7 +180,7 @@ for c in list_city:
 					df_city_cand = df_city_cand[pd.isnull(df_city_cand['过往病史和就医需求'.decode('utf-8')])]
 				## rule 5: requirement on province
 				school_province = list(df_target_school['省份'.decode('utf-8')])[0]
-				df_city_cand = df_city_cand[(df_city_cand['选择地区'.decode('utf-8')] == school_province)| (df_city_cand['选择地区'.decode('utf-8')] == '都可以'.decode('utf-8'))]
+				df_city_cand = df_city_cand[(df_city_cand['调整后选择地区'.decode('utf-8')] == school_province)| (df_city_cand['调整后选择地区'.decode('utf-8')] == '都可以'.decode('utf-8'))| (df_city_cand['调整后选择地区'.decode('utf-8')] == '服从调配'.decode('utf-8'))]
 				## rule 6-7: science vs. humanity - core matching
 				for index, row in df_s.iterrows():
 					if row['文理科'.decode('utf-8')] == '文科'.decode('utf-8'):
