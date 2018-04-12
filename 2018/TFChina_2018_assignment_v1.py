@@ -7,240 +7,157 @@ import os
 import datetime as dt
 import pandas as pd
 import numpy as np
+pd.options.mode.chained_assignment = None
 
 ######################################################################################################
 ## VARIABLES
-dir_input_file = 'data.xlsx'
+######################################################################################################
+dir_input_file = '2017-2019_20170623104814_cleaned.xlsx'
 dir_mapping_file = 'mapping table.xlsx'
 dir_output_file = 'output.xlsx'
-quota_buffer = 0.15 # % of buffer for each ratio balance category
-#headcount_lb = 10 # lowerbound to enforce ratio balance (# headcount in a city)
 
 ######################################################################################################
 ## LOAD DATA
-df_teacher = pd.read_excel(dir_input_file, sheetname = 'Teachers', header = 0, na_values = "", encoding="gbk")
-df_school = pd.read_excel(dir_input_file, sheetname = 'Schools', header = 0, na_values = "", encoding="gbk")
-df_svh = pd.read_excel(dir_mapping_file, sheetname = 'science_v_humanity', header = 0, na_values = "", encoding="gbk")
-df_english = pd.read_excel(dir_mapping_file, sheetname = 'Englisth_competency', header = 0, na_values = "", encoding="gbk")
-df_priority = pd.read_excel(dir_mapping_file, sheetname = 'TF_China', header = 0, na_values = "", encoding="gbk")
-df_flexibility = pd.read_excel(dir_mapping_file, sheetname = 'Flexibility', header = 0, na_values = "", encoding="gbk")
-writer = pd.ExcelWriter(dir_output_file)
+######################################################################################################
+df_teacher = pd.read_excel(dir_input_file, sheetname = 'Sheet1', header = 0, na_values = "", encoding="gbk")
+df_prov_ratio = pd.read_excel(dir_mapping_file, sheetname = 'Province_ratio', header = 0, na_values = "", encoding="gbk")
 
 ######################################################################################################
 ## DATA PREPARATION
-df_school = df_school.sort_values(by = '地级市'.decode('utf-8')) # group by city (sort by count if needed)
-list_city = df_school['地级市'.decode('utf-8')].unique()
-cols_exp = ['项目学校'.decode('utf-8'),'科目'.decode('utf-8'),'老师'.decode('utf-8'),'科目优先级'.decode('utf-8')]
-# df_teacher = df_teacher.sample(frac = 1).reset_index(drop=True) # shuffle teachers; to be removed
+######################################################################################################
 
-# label flexible candidates
-df_teacher = pd.merge(df_teacher, df_flexibility, how = 'left', left_on = '姓名'.decode('utf-8'), right_on = '姓名'.decode('utf-8'))
-df_teacher['调整后选择地区'.decode('utf-8')] = df_teacher['调整后选择地区'.decode('utf-8')].fillna(df_teacher['选择地区'.decode('utf-8')])
+## create global column names (string)
+###################################################
+str_colname_ID = '序号'.decode('utf-8')
+str_colname_name = '1.姓名'.decode('utf-8')
+str_colname_gender = '性别'.decode('utf-8')
+str_colname_prov_preference = '13.您认为您在下列哪个地区能发挥更大的影响力？'.decode('utf-8')
+str_colname_spouse_in_TFC = '11.您的丈夫/妻子是否也是美丽中国的项目老师？'.decode('utf-8')
+str_colname_spouse_name = '您丈夫/妻子的姓名是：'.decode('utf-8')
+str_colname_bfgf_in_TFC = '您的男/女朋友是否也是美丽中国的项目老师？'.decode('utf-8')
+str_colname_bfgf_name = '您男/女朋友的姓名是：'.decode('utf-8')
+str_colname_medical_history = '12.您是否有较严重的过往病史？'.decode('utf-8')
+str_colname_undergrad_school = '8.毕业学校（本科阶段）：'.decode('utf-8')
+str_colname_english_test = '15.您已经完成下列哪类英语水平考试？'.decode('utf-8')
+str_colname_english_score = '16.以上英语考试的成绩为：（例：大学英语四级：570；托福：90）'.decode('utf-8')
+str_colname_degree_category = '10.这个专业属于下列哪一类别：'.decode('utf-8')
 
+str_colname_prov_name = '省'.decode('utf-8')
+str_colname_prov_ppl_ratio = '人数比例'.decode('utf-8')
+
+## create placeholder dataframes
+###################################################
+# copy of teacher dataframe
 df_cand = df_teacher.copy()
+# copy of ID-name mapping
+df_id_name_mapping = df_cand[[str_colname_ID,str_colname_name]]
 
-# province
-df_school['省份'.decode('utf-8')] = df_school['省份'.decode('utf-8')].apply(lambda x: x[:2]) # standardize province format
+## calculate assignment criteria
+###################################################
+## total number of teachers
+num_count_total_teachers = len(df_cand)
 
-# science v. humanity
-df_cand['sub_cat'] = df_cand['高中科目类型'.decode('utf-8')]
-df_cand['sub_cat'] = df_cand['sub_cat'].replace('综合'.decode('utf-8'),np.nan)
-df_cand['sub_cat'] = df_cand['sub_cat'].fillna(df_cand['本科专业所属类别'.decode('utf-8')])
+## ratio： has_condition (i.e. has medical history)
+num_count_has_condition = len(df_cand[df_cand[str_colname_medical_history] == '是'.decode('utf-8')])
+num_frac_has_condition = num_count_has_condition/float(num_count_total_teachers)
 
-# English competency
-eng_comp = '英语能力分级'.decode('utf-8')
-qual_in_data = '英语水平考试'.decode('utf-8')
-df_cand[eng_comp] = [4] * len(df_cand)
-for index, row in df_cand.iterrows():
-	if (('专业八级'.decode('utf-8') in row[qual_in_data]) or ('专业四级'.decode('utf-8') in row[qual_in_data]) or ('GRE' in row[qual_in_data]) or ('SAT' in row[qual_in_data]) or ('专八'.decode('utf-8') in row[qual_in_data]) or ('专四'.decode('utf-8') in row[qual_in_data])):
-		df_cand.loc[index, eng_comp] = 1
-	elif (('雅思'.decode('utf-8') in row[qual_in_data]) or ('托福'.decode('utf-8') in row[qual_in_data])):
-		df_cand.loc[index, eng_comp] = 2
-	elif (('大学英语六级'.decode('utf-8') in row[qual_in_data]) or ('大学英语四级'.decode('utf-8') in row[qual_in_data])):
-		df_cand.loc[index, eng_comp] = 3
+## ratio: is_985211
 
-# calculate all ratios
-# gender
-list_gender = list(df_cand['性别'.decode('utf-8')])
-dict_gender = {x.decode('utf-8'):list_gender.count(x) for x in list_gender}
-female_ratio = float(dict_gender['女士'.decode('utf-8')])/(sum(dict_gender.values()))
-male_ratio = 1 - female_ratio
-# college
-ct_oversea = sum(list(df_cand['毕业院校: 海外'.decode('utf-8')]))
-ct_985 = sum(list(df_cand['毕业院校: 985'.decode('utf-8')]))
-ct_211 = sum(list(df_cand['毕业院校: 211'.decode('utf-8')]))
-ct_total = len(df_cand)
-ratio_985 = float(ct_985) / ct_total
-ratio_oversea = float(ct_oversea) / ct_total
-ratio_211 = 1 - ratio_985 - ratio_oversea
-# normal
-df_cand['normal'] = df_cand['本科毕业学校'.decode('utf-8')].str.contains('师范'.decode('utf-8'))
-df_cand['normal'] = df_cand['normal'].replace(True, 1)
-df_cand['normal'] = df_cand['normal'].replace(False, 0)
-list_normal = list(df_cand['normal'])
-dict_normal = {x:list_normal.count(x) for x in list_normal}
-normal_ratio = float(dict_normal[1])/(sum(dict_normal.values()))
-non_normal_ratio = 1 - normal_ratio
+## ratio: is_foreign
 
-# specialty 
-list_specialty = list(df_cand['17.除文化课知识外您有艺术、体育等方面的特长？'.decode('utf-8')])
-dict_specialty = {x.decode('utf-8'):list_specialty.count(x) for x in list_specialty}
-with_spec_ratio = float(dict_specialty['是'.decode('utf-8')])/(sum(dict_specialty.values()))
-no_spec_ratio = 1 - with_spec_ratio
+## ratio: is_male
+
+## ratio: has_science_degree
+num_count_has_science_degree = len(df_cand[df_cand[str_colname_degree_category] == '理科'.decode('utf-8')]) # need to manually check this column in input data
+num_frac_has_science_degree = num_count_has_science_degree/float(num_count_total_teachers)
+
+## ratio: can_teach_English
+
+
+## calculate each province's total headcount
+df_prov_ratio['headcount_province_total'] = df_prov_ratio[str_colname_prov_ppl_ratio] * num_count_total_teachers
+df_prov_ratio['headcount_province_total'] = df_prov_ratio['headcount_province_total'].apply(round)
+
+## calculate each province's headcount/quota by criteria
+list_criteria = ['has_condition','has_science_degree']
+for c in list_criteria:
+	str_colname_headcount = 'headcount_' + c
+	str_criteria_frac = 'num_frac_' + c
+	df_prov_ratio[str_colname_headcount] = df_prov_ratio['headcount_province_total'] * eval(str_criteria_frac)
+	df_prov_ratio[str_colname_headcount] = df_prov_ratio[str_colname_headcount].apply(round)
+
+## keep track of spouse/bfgf
+###################################################
+df_spouse = df_cand[
+	(df_cand[str_colname_spouse_in_TFC] == '是'.decode('utf-8')) | (df_cand[str_colname_bfgf_in_TFC] == '是'.decode('utf-8'))
+]
+df_spouse['spouse_name'] = df_spouse[str_colname_spouse_name] # create spouse name column (by copying spouse name)
+df_spouse['spouse_name'] = df_spouse['spouse_name'].fillna(df_spouse[str_colname_bfgf_name]) # fill null with bf/gf name
+df_spouse_name_mapping = df_id_name_mapping.rename(columns = {
+	str_colname_ID: 'spouse_ID',
+	str_colname_name: 'spouse_name'
+}) # rename columns in mapping table for merging purpose
+df_spouse = pd.merge(df_spouse, df_spouse_name_mapping, how = 'left', on = 'spouse_name') # obtain spouse ID
+df_spouse = df_spouse[pd.notnull(df_spouse['spouse_ID'])] # drop null spouse ID
 
 ######################################################################################################
-## GENERATE LIST FOR EACH SCHOOL
-def ratio_balance_trigger(c, df_city_cand, df_sub_selected, dict_quota, dict_counter):
-	teacher_gender = list(df_sub_selected['性别'.decode('utf-8')])[0]
-	teacher_985 = list(df_sub_selected['毕业院校: 985'.decode('utf-8')])[0]
-	teacher_211 = list(df_sub_selected['毕业院校: 211'.decode('utf-8')])[0]
-	teacher_normal = list(df_sub_selected['normal'])[0]
-	teacher_spec = list(df_sub_selected['17.除文化课知识外您有艺术、体育等方面的特长？'.decode('utf-8')])[0]
-	if teacher_gender == '女士'.decode('utf-8'):
-		dict_counter['city_female_count'] += 1
-		if dict_counter['city_female_count'] > dict_quota['quota_female']:
-			df_city_cand = df_city_cand[df_city_cand['性别'.decode('utf-8')] != '女士'.decode('utf-8')]
-			print('Gender constraint triggered (need more male) - City: ' + c.decode('utf-8'))
-	if teacher_985 == 1:
-		dict_counter['city_985_count'] += 1
-		if dict_counter['city_985_count'] > dict_quota['quota_985']:
-			df_city_cand = df_city_cand[df_city_cand['毕业院校: 985'.decode('utf-8')] != 1]
-			print('985 constraint triggered (need more oversea) - City: ' + c.decode('utf-8'))
-	if teacher_211 == 1:
-		dict_counter['city_211_count'] += 1
-		if dict_counter['city_211_count'] > dict_quota['quota_211']:
-			df_city_cand = df_city_cand[df_city_cand['毕业院校: 211'.decode('utf-8')] != 1]
-			print('211 constraint triggered (need more oversea) - City: ' + c.decode('utf-8'))
-	if teacher_normal == 0:
-		dict_counter['city_normal_count'] += 1
-		if dict_counter['city_normal_count'] > dict_quota['quota_normal']:
-			df_city_cand = df_city_cand[df_city_cand['normal'] != 0]
-			print('Normal constraint triggered (need more normal) - City: ' + c.decode('utf-8'))
-	if teacher_spec == '是'.decode('utf-8'):
-		dict_counter['city_spec_count'] += 1
-		if dict_counter['city_spec_count'] > dict_quota['quota_spec']:
-			df_city_cand = df_city_cand[df_city_cand['17.除文化课知识外您有艺术、体育等方面的特长？'.decode('utf-8')] != '是'.decode('utf-8')]
-			print('Specialty constraint triggered (need more non-specialty) - City: ' + c.decode('utf-8'))
-	return df_city_cand, dict_counter
+## CORE ALGORITHM
+######################################################################################################
 
-df_exp = pd.DataFrame(columns = cols_exp)
-list_city = df_school['地级市'.decode('utf-8')].unique()
-df_school = pd.merge(df_school, df_priority, how = 'left', left_on = '具体派遣方式说明'.decode('utf-8'), right_on = '具体派遣方式说明'.decode('utf-8'))
-for c in list_city:
-	df_city_school = df_school[df_school['地级市'.decode('utf-8')] == c]
-	df_city_school = df_city_school.sort_values(by = ['美丽中国班优先级'.decode('utf-8')], ascending = [False]) # prioritize schools
-	city_total_headcount = sum([(list(df_city_school['人数'.decode('utf-8') + str(p)])).count(1) for p in range(1, 9)])
-	df_city_cand = df_cand.copy()
-	if city_total_headcount >= headcount_lb:
-		# enforce limit on majority
-		quota_female = int(female_ratio * city_total_headcount * (1 + quota_buffer))
-		quota_211 = int(ratio_211 * city_total_headcount * (1 + quota_buffer))
-		quota_985 = int(ratio_985 * city_total_headcount * (1 + quota_buffer))
-		quota_normal = int(non_normal_ratio * city_total_headcount * (1 + quota_buffer))
-		quota_spec = int(with_spec_ratio * city_total_headcount * (1 + quota_buffer))
-	else:
-		quota_female = city_total_headcount
-		quota_211 = city_total_headcount
-		quota_985 = city_total_headcount
-		quota_normal = city_total_headcount
-		quota_spec = city_total_headcount
-	dict_quota = {'quota_female': quota_female, 'quota_985': quota_985, 'quota_211': quota_211, 'quota_normal': quota_normal, 'quota_spec': quota_spec}
-	dict_counter = {'city_female_count': 0, 'city_985_count': 0, 'city_211_count': 0, 'city_normal_count': 0, 'city_spec_count': 0}
-	for index, row in df_city_school.iterrows():
-		id_school = row['序号'.decode('utf-8')]
-		str_df_school = "df_" + str(id_school)
-		df_s = pd.DataFrame(columns = cols_exp)
-		for p in range(1,9):
-			# up to 8 subject requests
-			df_temp = pd.DataFrame(columns = cols_exp)
-			sub = '科目'.decode('utf-8') + str(p)
-			ppl = '人数'.decode('utf-8') + str(p)
-			str_sub = row[sub]
-			count_ppl = row[ppl]
-			if count_ppl > 0:
-				count_ppl = int(count_ppl)
-				list_pos = [str_sub] * count_ppl
-				list_pri = [p] * count_ppl
-				df_temp['科目'.decode('utf-8')] = list_pos
-				df_temp['科目优先级'.decode('utf-8')] = list_pri
-				df_temp['项目学校'.decode('utf-8')] = [row['项目学校'.decode('utf-8')]] * len(df_temp)
-			df_s = pd.concat([df_s, df_temp])
-		if len(df_s) > 0:
-			df_s['地级市'.decode('utf-8')] = [c] * len(df_s)
-			df_s['主科目'.decode('utf-8')] = df_s['科目'.decode('utf-8')].apply(lambda x: x[:2])
-			df_s = pd.merge(df_s, df_svh, how = 'left', left_on = '主科目'.decode('utf-8'), right_on = '主科目'.decode('utf-8'))
-			df_s = df_s.sort_values(by = '科目优先级'.decode('utf-8'), ascending = True)
-			df_s['老师'.decode('utf-8')] = [''] * len(df_s)
-			req_ppl = len(df_s)
-			if req_ppl > 0:
-				df_selected = pd.DataFrame()
-				name_school = list(df_s['项目学校'.decode('utf-8')])[0].decode('utf-8')
-				df_target_school = df_school[df_school['项目学校'.decode('utf-8')] == name_school]
-				## rule 3: medical attention
-				school_med_condition = list(df_target_school['是否能够接受有病史的项目老师'.decode('utf-8')])[0]
-				if school_med_condition == 0:
-					df_city_cand = df_city_cand[pd.isnull(df_city_cand['过往病史和就医需求'.decode('utf-8')])]
-				## rule 5: requirement on province
-				school_province = list(df_target_school['省份'.decode('utf-8')])[0]
-				df_city_cand = df_city_cand[(df_city_cand['调整后选择地区'.decode('utf-8')] == school_province)| (df_city_cand['调整后选择地区'.decode('utf-8')] == '都可以'.decode('utf-8'))| (df_city_cand['调整后选择地区'.decode('utf-8')] == '服从调配'.decode('utf-8'))]
-				## rule 6-7: science vs. humanity - core matching
-				for index, row in df_s.iterrows():
-					if row['文理科'.decode('utf-8')] == '文科'.decode('utf-8'):
-						df_sub_pool = df_city_cand[df_city_cand['sub_cat'] == '文科'.decode('utf-8')]
-						if len(df_sub_pool) > 0:
-							df_sub_selected = df_sub_pool.iloc[[0]]
-							selected_teacher_name = list(df_sub_selected['姓名'.decode('utf-8')])[0]
-							df_s.loc[index, '老师'.decode('utf-8')] = selected_teacher_name
-							df_cand = df_cand[df_cand['姓名'.decode('utf-8')] != selected_teacher_name]
-							df_city_cand = df_city_cand[df_city_cand['姓名'.decode('utf-8')] != selected_teacher_name]
-							df_city_cand, dict_counter = ratio_balance_trigger(c, df_city_cand, df_sub_selected, dict_quota, dict_counter)
-					if row['文理科'.decode('utf-8')] == '理科'.decode('utf-8'):
-						df_sub_pool = df_city_cand[df_city_cand['sub_cat'] == '理科'.decode('utf-8')]
-						if len(df_sub_pool) > 0:
-							df_sub_selected = df_sub_pool.iloc[[0]]
-							selected_teacher_name = list(df_sub_selected['姓名'.decode('utf-8')])[0]
-							df_s.loc[index, '老师'.decode('utf-8')] = selected_teacher_name
-							df_cand = df_cand[df_cand['姓名'.decode('utf-8')] != selected_teacher_name]
-							df_city_cand = df_city_cand[df_city_cand['姓名'.decode('utf-8')] != selected_teacher_name]
-							df_city_cand, dict_counter = ratio_balance_trigger(c, df_city_cand, df_sub_selected, dict_quota, dict_counter)
-					if row['文理科'.decode('utf-8')] == '特长'.decode('utf-8'):
-						df_sub_pool = df_city_cand[df_city_cand['17.除文化课知识外您有艺术、体育等方面的特长？'.decode('utf-8')] == '是'.decode('utf-8')] # potentially add another source of specialty
-						if len(df_sub_pool) > 0:
-							df_sub_selected = df_sub_pool.iloc[[0]]
-							selected_teacher_name = list(df_sub_selected['姓名'.decode('utf-8')])[0]
-							df_s.loc[index, '老师'.decode('utf-8')] = selected_teacher_name
-							df_cand = df_cand[df_cand['姓名'.decode('utf-8')] != selected_teacher_name]
-							df_city_cand = df_city_cand[df_city_cand['姓名'.decode('utf-8')] != selected_teacher_name]
-							df_city_cand, dict_counter = ratio_balance_trigger(c, df_city_cand, df_sub_selected, dict_quota, dict_counter)
-					if row['文理科'.decode('utf-8')] == '英语'.decode('utf-8'):
-						df_sub_pool = df_city_cand[df_city_cand[eng_comp] < 4]
-						if len(df_sub_pool) > 0:
-							df_sub_pool = df_sub_pool.sort_values(by = eng_comp, ascending = True) # sort candidates by English competency
-							df_sub_selected = df_sub_pool.iloc[[0]]
-							selected_teacher_name = list(df_sub_selected['姓名'.decode('utf-8')])[0]
-							df_s.loc[index, '老师'.decode('utf-8')] = selected_teacher_name
-							df_cand = df_cand[df_cand['姓名'.decode('utf-8')] != selected_teacher_name]
-							df_city_cand = df_city_cand[df_city_cand['姓名'.decode('utf-8')] != selected_teacher_name]
-							df_city_cand, dict_counter = ratio_balance_trigger(c, df_city_cand, df_sub_selected, dict_quota, dict_counter)
-				## add more school level matching criteria here
-		df_exp = pd.concat([df_exp, df_s])
-	print(c.decode('utf-8'))
+writer = pd.ExcelWriter(dir_output_file) # initiate output file
+
+def counter_updater(df_top_cand, dict_counter):
+	if df_top_cand.loc[0, str_colname_medical_history] == '是'.decode('utf-8'):
+		dict_counter['has_condition'] += 1
+	return dict_counter
+
+def candidate_updater(dict_counter, dict_quota, df_cand_prov):
+	if dict_counter['has_condition'] >= dict_quota['has_condition']:
+		df_cand_prov = df_cand_prov[df_cand_prov[str_colname_medical_history] != '是'.decode('utf-8')]
+	return df_cand_prov
+
+for p in list(df_prov_ratio[str_colname_prov_name]): # loop through each province
+	print(p + '...')
+	# setup
+	df_cand_prov = df_cand.copy() # create local copy of candidate list for this province only
+	list_prov_assigned_ID = list() # create placeholder list for assigned candidates to this province
+	df_prov_ratio_sub = df_prov_ratio.loc[df_prov_ratio[str_colname_prov_name] == p] # subset of quota for this province only
+	df_prov_ratio_sub = df_prov_ratio_sub.reset_index()
+	num_prov_quota = df_prov_ratio.loc[df_prov_ratio[str_colname_prov_name] == p, 'headcount_province_total']
+	
+	# create dictionaries to keep track of all criteria
+	dict_quota = {c: int(df_prov_ratio_sub.loc[0, 'headcount_' + c]) for c in list_criteria} # create dictionary for quota
+	dict_counter = {c: 0 for c in list_criteria} # create dictionary of counter for each criteria (initiate with 0)
 	print(dict_quota)
+
+	# sort by province preference
+	df_cand_prov['sort_prov'] = df_cand_prov[str_colname_prov_preference].map({
+		p: 1,
+		'都可以'.decode('utf-8'): 2
+	})
+	df_cand_prov['sort_prov'] = df_cand_prov['sort_prov'].fillna(3)
+	df_cand_prov = df_cand_prov.sort_values(by = 'sort_prov', ascending = True) # sort candidates by preference
+	
+	# assign top candidate to the province
+	while (not df_cand_prov.empty) and (len(list_prov_assigned_ID) <= int(num_prov_quota)):
+		# extract information of top candidate
+		df_top_cand = df_cand_prov.iloc[[0]]
+		df_top_cand = df_top_cand.reset_index()
+		num_cand_ID = df_top_cand.loc[0, str_colname_ID] # extract ID
+		# assign to province
+		list_prov_assigned_ID.append(num_cand_ID)
+		# update province criteria counter
+		dict_counter = counter_updater(df_top_cand, dict_counter)
+		# update candidate pool if quota is met
+		df_cand_prov = candidate_updater(dict_counter, dict_quota, df_cand_prov)
+		# remove assigned person from candidate list
+		df_cand_prov = df_cand_prov[df_cand_prov[str_colname_ID] != num_cand_ID]
+		df_cand = df_cand[df_cand[str_colname_ID] != num_cand_ID]
+	
+	# generate assignment table for the province
 	print(dict_counter)
-
-cols_school = ['项目学校'.decode('utf-8'), '省份'.decode('utf-8'),'是否能够接受有病史的项目老师'.decode('utf-8'),'是否至少匹配一名男生'.decode('utf-8')]
-df_exp = pd.merge(df_exp, df_school[cols_school], how = 'left', left_on = '项目学校'.decode('utf-8'), right_on = '项目学校'.decode('utf-8'))
-
-df_exp.to_excel(writer,'Output', index = False)
-
-
-df_remain = df_teacher[~df_teacher['姓名'.decode('utf-8')].isin(df_exp['老师'.decode('utf-8')].unique())]
-del df_remain['序号'.decode('utf-8')]
-df_remain = df_remain.drop_duplicates()
-
-if df_remain.empty:
-	print('Warning: Not all teachers are assigned - {0} candidates available'.format(len(df_remain)))
-	df_remain.to_excel(writer, 'Unassigned', index = False)
+	df_prov = df_teacher[df_teacher[str_colname_ID].isin(list_prov_assigned_ID)]
+	df_prov.to_excel(writer, p, index = False)
 
 writer.save()
 writer.close()
